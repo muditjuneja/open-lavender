@@ -12,6 +12,51 @@ An open-source, hackable version of **"Lavender"**, the little duck robot OpenAI
 > electronic design files are not open**, and Pollen has asked the press not to call it open hardware.
 > This project aims for a fully open robot: open hardware, open body software and a swappable "brain" that
 > can run on open models.
+>
+> **Design rule:** we build on the fully open Open Duck Mini and give the robot **its own look**. We don't copy
+> the Microduck's or Disney's BDX design, so everything published here is clean to share and build on.
+
+## Quick start (Phase 0: brain first)
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+lavender --debug                       # offline scripted brain + simulated duck, no API key needed
+```
+
+Swap in a real brain:
+
+```bash
+pip install -e ".[anthropic]"  && lavender --brain anthropic                   # Claude (ANTHROPIC_API_KEY)
+pip install -e ".[openai]"     && lavender --brain openai --model <model>      # OpenAI (OPENAI_API_KEY)
+lavender --brain openai --base-url http://localhost:11434/v1 --model <model>   # local model via Ollama, vLLM, llama.cpp…
+```
+
+For a local model, pick one that supports **tool calling** (and ideally vision, so `take_photo` works;
+otherwise add `--no-vision`). Other options:
+
+| Flag | What it does |
+|---|---|
+| `--robot sim` / `sim-head` / `sts-head` | simulated duck with legs / simulated head only / real 2-servo STS3215 pan-tilt head |
+| `--port /dev/ttyUSB0 --pan-id 1 --tilt-id 2` | servo bus settings for `sts-head` |
+| `--camera 0` | webcam for `take_photo` (`pip install -e ".[camera]"`) |
+| `--memory PATH` | long-term memory file (default `~/.lavender/memory.json`, `''` disables it) |
+
+The Claude brain defaults to `claude-opus-5-5` at `--effort low` to keep replies fast. It also turns on the API's
+server-side refusal fallback: if a safety check declines a request, the API retries it on a fallback model.
+
+```
+lavender/
+  skills.py            the only interface between brain and body (tool schemas + dispatcher)
+  brain/               scripted (offline) · anthropic_brain (Claude) · openai_compat (OpenAI + local servers) · persona
+  robot/               base behaviour (look/emote/walk) · sim · feetech STS bus driver · sts_head · animations
+  memory.py camera.py cli.py
+tests/                 pytest; LLM loops are tested against fake clients, no network needed
+```
+
+Status: runs end-to-end with the scripted brain and simulated body. The Claude and OpenAI-compatible loops
+pass tests against fake clients but **haven't been run against the live APIs yet**. The Feetech driver's
+packet encoding is tested but **hasn't been run on real servos yet**.
 
 ---
 
@@ -98,20 +143,12 @@ upgrade the compute. Prices are rough USD estimates.
 - **Deploy:** ONNX runtime on the RK3566 with a 50 Hz loop in Rust, reusing the Apache-2.0
   Microduck runtime and `rustypot` for the motor bus where possible.
 
-### Skills (`skills/`) — the API the brain sees
-A small set of well-described tools. This interface is what makes the "API-driven robot" demo possible:
+### Skills (`lavender/skills.py`) — the API the brain sees
+A small set of well-described tools. This interface is what makes the "API-driven robot" demo possible.
+Implemented now: `look(yaw_deg, pitch_deg)`, `emote(kind)` (quack, nod, shake, happy_wiggle, curious, sleepy,
+dance), `walk(vx, yaw_rate, duration_s)`, `set_posture(stand|sit)`, `take_photo()`, `remember(fact)` and
+`get_status()`. Planned: `look_at(person|sound)` (needs face tracking and sound direction) and `grab(target)` (needs the beak).
 
-```json
-[
-  {"name": "walk",       "params": {"vx": "m/s", "vy": "m/s", "yaw_rate": "rad/s", "duration_s": "number"}},
-  {"name": "look_at",    "params": {"target": "'person' | 'sound' | {x,y} in image coords"}},
-  {"name": "emote",      "params": {"kind": "quack | happy_wiggle | nod | shake | dance | sleepy"}},
-  {"name": "posture",    "params": {"pose": "stand | sit | crouch"}},
-  {"name": "grab",       "params": {"target": "text description"}},
-  {"name": "take_photo", "params": {}},
-  {"name": "get_state",  "params": {}}
-]
-```
 The robot also runs these without the brain: face tracking (BlazeFace or YOLO-nano on the NPU), sound-source
 turning, idle "breathing", and fall recovery.
 
@@ -141,6 +178,11 @@ old threads. Most of the "companion" quality comes from **idle animation, gaze a
 
 1. **Phase 0: brain first, no legs.** Laptop mic, webcam and a 2-servo pan/tilt "head" built from 2× STS3215.
    Build the skill API, the brain loop, persona and memory. Get a talking, looking, quacking head working in a weekend.
+   - [x] skills layer, simulated body, scripted / Claude / OpenAI-compatible brains, memory, webcam, STS3215 head driver
+   - [ ] live-test the brains against real APIs and a local model; bench-test the head on real servos
+   - [ ] voice: wake word → speech-to-text → brain → text-to-speech, with a streaming/realtime option
+   - [ ] reflexes: face tracking (`look_at person`), idle animations, a listening/thinking/speaking LED
+   - [ ] a 3D-printable pan/tilt head with its own look
 2. **Phase 1: legs.** Build Open Duck Mini v2, reproduce its walking policy, then move to the RK3566 board.
 3. **Phase 2: the Lavender head.** Camera, ToF, mics, speaker, LED eye and beak servo in a new head shell.
    Retrain policies with the new head mass.
@@ -159,3 +201,7 @@ and run the `brain/` + `skills/` layers on its open SDK. The body layer here is 
 - Open Duck Mini: [hardware + BOM](https://github.com/apirrone/Open_Duck_Mini/blob/v2/README.md),
   [runtime](https://github.com/apirrone/Open_Duck_Mini_Runtime/tree/v2)
 - Sibling project: Pollen / Hugging Face **Reachy Mini** (open desktop robot, Python SDK)
+
+## License
+Code: [Apache-2.0](LICENSE), the same as Open Duck Mini's and Microduck's software. Hardware files, once they exist,
+will use an open hardware license (probably CERN-OHL-P or CERN-OHL-S; still to be decided).
